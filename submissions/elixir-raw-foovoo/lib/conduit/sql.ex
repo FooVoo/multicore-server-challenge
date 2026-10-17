@@ -18,7 +18,7 @@ defmodule Conduit.Sql do
   @list_cols "a.id, a.slug, a.title, a.description, a.created_at, a.updated_at, #{@tag_list} AS tag_list, #{@tail}"
   @full_cols "a.id, a.slug, a.title, a.description, a.body, a.created_at, a.updated_at, #{@tag_list} AS tag_list, #{@tail}"
   # A feed row's author was reached through the viewer's follows row in this same statement snapshot.
-  @feed_cols "a.id, a.slug, a.title, a.description, a.created_at, a.updated_at, #{@tag_list} AS tag_list, " <>
+  @feed_cols "a.id, a.slug, a.title, a.description, a.created_at, a.updated_at, COALESCE(pt.names, '{}'::text[]) AS tag_list, " <>
                "#{@tail_head}true AS following"
 
   # The LEFT JOIN LATERAL keeps the count row when the page is empty (then every page column is NULL).
@@ -57,12 +57,20 @@ defmodule Conduit.Sql do
                   )
 
   # $4 = limit + offset, saturated by the caller so a huge offset can't overflow bigint.
-  @feed list_page.(
-          "SELECT 1 FROM articles a WHERE a.author_id IN (SELECT fo.followee_id FROM follows fo WHERE fo.follower_id = $1) LIMIT 1000",
-          "WHERE a.id IN (SELECT x.id FROM follows fo CROSS JOIN LATERAL (SELECT a2.id FROM articles a2 WHERE a2.author_id = fo.followee_id ORDER BY a2.id DESC LIMIT $4) x WHERE fo.follower_id = $1 ORDER BY x.id DESC LIMIT $2 OFFSET $3)",
-          "ORDER BY a.id DESC",
-          @feed_cols
-        )
+  @feed_page_ids "SELECT x.id FROM follows fo CROSS JOIN LATERAL " <>
+                   "(SELECT a2.id FROM articles a2 WHERE a2.author_id = fo.followee_id ORDER BY a2.id DESC LIMIT $4) x " <>
+                   "WHERE fo.follower_id = $1 ORDER BY x.id DESC LIMIT $2 OFFSET $3"
+
+  # OFFSET 0 keeps generic-plan row estimates from turning page-scoped tag probes into a whole-table scan.
+  @feed "WITH c AS (SELECT count(*) AS n FROM (SELECT 1 FROM articles a WHERE a.author_id IN " <>
+          "(SELECT fo.followee_id FROM follows fo WHERE fo.follower_id = $1) LIMIT 1000) s), " <>
+          "page_ids AS MATERIALIZED (#{@feed_page_ids}), " <>
+          "page_tags AS (SELECT at.article_id, array_agg(t.name ORDER BY t.name) AS names FROM page_ids " <>
+          "CROSS JOIN LATERAL (SELECT article_id, tag_id FROM article_tags WHERE article_id = page_ids.id OFFSET 0) at " <>
+          "JOIN tags t ON t.id = at.tag_id GROUP BY at.article_id) " <>
+          "SELECT c.n, p.* FROM c LEFT JOIN LATERAL (SELECT #{@feed_cols} " <>
+          "FROM articles a JOIN users u ON u.id = a.author_id LEFT JOIN page_tags pt ON pt.article_id = a.id " <>
+          "WHERE a.id IN (SELECT id FROM page_ids) ORDER BY a.id DESC) p ON true ORDER BY p.id DESC"
 
   @article_by_slug "SELECT #{@full_cols} FROM articles a JOIN users u ON u.id = a.author_id WHERE a.slug = $2"
 

@@ -85,9 +85,10 @@ defmodule Conduit.Http do
     end
   end
 
-  # Idle: shrink a heap that the last request grew.
+  # Avoid a full collection while the next request is already arriving.
   defp wait(sock, buf, hib) do
-    if hib != :infinity and heap_words() > hib do
+    if buf == <<>> and hib != :infinity and heap_words() > hib and
+         :erlang.process_info(self(), :message_queue_len) == {:message_queue_len, 0} do
       :erlang.hibernate(__MODULE__, :loop, [sock, buf, hib])
     else
       loop(sock, buf, hib)
