@@ -67,6 +67,7 @@ defmodule Conduit.Http do
         accept(lsock)
 
       {:error, _} ->
+        Process.sleep(50)
         accept(lsock)
     end
   end
@@ -184,7 +185,7 @@ defmodule Conduit.Http do
 
   defp body(rest, method, target, %{cl: cl} = acc) do
     case rest do
-      <<body::binary-size(cl), tail::binary>> -> {:ok, method, target, acc.auth, acc.close, body, tail}
+      <<body::binary-size(^cl), tail::binary>> -> {:ok, method, target, acc.auth, acc.close, body, tail}
       _ -> :more
     end
   end

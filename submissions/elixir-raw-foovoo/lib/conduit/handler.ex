@@ -13,11 +13,32 @@ defmodule Conduit.Handler do
     catch
       {:fail, status, msg} -> {status, Json.error(msg)}
       {:pg, code} -> pg_error(code)
-      {:db_down, e} -> Logger.error("database unavailable: #{inspect(e)}") && {503, Json.error("database unavailable")}
+      {:db_down, e} ->
+        log_db_down(e)
+        {503, Json.error("database unavailable")}
     end
   end
 
   def handle(_path, _method, _query, _auth, _body), do: {404, Json.error("not found")}
+
+  # One line per second at most: under an outage every request lands here, and a flood of log writes would take CPU
+  # from the requests that could still succeed.
+  defp log_db_down(e) do
+    now = System.monotonic_time(:second)
+    ref = :persistent_term.get({__MODULE__, :last_log}, nil) || init_last_log()
+
+    last = :atomics.get(ref, 1)
+
+    if now != last and :atomics.compare_exchange(ref, 1, last, now) == :ok do
+      Logger.error("database unavailable: #{inspect(e)}")
+    end
+  end
+
+  defp init_last_log do
+    ref = :atomics.new(1, [])
+    :persistent_term.put({__MODULE__, :last_log}, ref)
+    ref
+  end
 
   defp pg_error("23505"), do: {422, Json.error("has already been taken")}
   defp pg_error("23503"), do: {404, Json.error("not found")}

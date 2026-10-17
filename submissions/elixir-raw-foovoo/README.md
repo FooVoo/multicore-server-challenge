@@ -32,7 +32,7 @@ JSON is OTP's built-in `:json` for request bodies only; responses are never enco
 ## Optimizations and why
 
 - **Front: direct.** Nginx would cost ~11% of the box and gzips nearly every response.
-- **One statement per request** (statements ported from the Rust entry): each list page and its capped count are one
+- **One statement per request** (statements adapted from the reference SQL in SPEC.md): each list page and its capped count are one
   statement; slug lookups fold into the statement that needs them; follow/favorite are single CTE statements that return
   the response row; ownership-checked UPDATE/DELETE with a 403/404 probe only when no row matched. Article creation with
   tags is one transaction of two statements (insert article + sorted tag upsert; link tags + read back), without tags it
