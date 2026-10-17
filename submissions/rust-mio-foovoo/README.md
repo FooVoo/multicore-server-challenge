@@ -132,24 +132,36 @@ between per-loop stats lines).
 
 ## Known gaps
 
-- Performance tested on arm64 (Ubuntu 24.04 VM, server and Postgres on 4 cores). Native x86_64 debug/release tests
-  and conformance on both seeds pass on a 4-vCPU/8-GB Ubuntu 24.04 droplet. With a separate 8-vCPU/16-GB load
-  generator over a private VPC, 24k users passed at 6,351 req/s, p50/p95/p99 1.9/8.4/44.0 ms and zero errors;
-  48k failed at 9,485 req/s, 1500.2/2248.7/3350.5 ms and 21.13% HTTP 503s (load-generator CPU 29%, no LG-limit
-  flag). Each probe used 60 s ramp + 60 s measured + 15 s tail. The search was stopped during the 36k probe at
-  the user's request, before bisection or a five-minute hold completed; these results establish no confirmed
-  score or ceiling. The earlier 4-core load generator was itself limited at 48k. An 8-core server run remains pending.
+- The local M1 Pro measurements below use an arm64 VM and short probes; they establish neither a five-minute
+  score nor performance on the challenge's eight-core x86_64 server.
 - No idle or slow-request timeouts: a client that never finishes its headers keeps its socket (bounded by the
   header cap and `LimitNOFILE`).
 
 ## Validation
 
-The submitted source, lockfile and scripts match the frozen revision used for these checks:
+Existing local validation, with no new test run for PR preparation:
 
-- Native x86_64 on Ubuntu 24.04 / PostgreSQL 18.6: `cargo test --locked` and `cargo test --release --locked`,
-  22 passed in each profile (one SQL-dump helper ignored).
-- `test/run.sh submissions/rust-mio-foovoo`: 197/197 checks passed against each of the verified `conduit_dev`
-  and full `conduit_seed` seeds, with default configuration.
-- Debug/release unit tests and both-seed conformance also passed on arm64. Before the final FEED-only rewrite,
-  concurrency and Postgres fault-injection checks passed, as did both-seed conformance with
-  `PG_ROUTE=count READ_BATCH=1 WRITE_BATCH=1`.
+- Local macOS arm64: `cargo test --locked` and `cargo test --release --locked`, 22 passed in each profile
+  (one SQL-dump helper ignored and separately run successfully).
+- Ubuntu 24.04 arm64 VM on the M1 Pro: `test/run.sh submissions/rust-mio-foovoo`, 197/197 checks passed against
+  each of `conduit_dev` and full `conduit_seed`, with defaults after the final FEED-only rewrite.
+- Before that rewrite, concurrency and Postgres fault-injection checks passed, as did both-seed conformance
+  with `PG_ROUTE=count READ_BATCH=1 WRITE_BATCH=1`.
+
+## Local M1 Pro measurements
+
+Host: MacBook Pro M1 Pro (10 cores, 32 GB). Lima VM: Ubuntu 24.04 arm64, 10 vCPUs, 16 GB, PostgreSQL 18 and
+the full seed (500k articles, 100k users). The local harness restricted server plus Postgres to vCPUs 0-3 and
+four load-generator processes to vCPUs 4-9, using separate loopback addresses. This CPU split belongs only to
+the local experiment; the submission performs no CPU pinning.
+
+Each probe used 60 s ramp + 60 s measured + 15 s tail:
+
+| Revision / run | Users | req/s | p50 / p95 / p99 (ms) | Errors | Result |
+|---|---:|---:|---:|---:|---|
+| v4 before FEED w1 (r14, top of ladder) | 80,000 | 19,645.6 | 311.0 / 453.9 / 505.9 | 0% | PASS |
+| Final FEED w1 (r16-w1, short regression probe) | 76,000 | 20,140.5 | 1.8 / 9.4 / 22.6 | 0% | PASS |
+
+Both reported `lg_limited: no` and `behind=false`. The 76k run tested the submitted source; the 80k run predates
+the FEED-only rewrite. These were separate runs under different host conditions, so their latency difference
+is not evidence of a gain from w1. Neither included a five-minute hold or established a failing upper bound.
