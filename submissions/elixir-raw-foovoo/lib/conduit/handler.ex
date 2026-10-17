@@ -5,6 +5,10 @@ defmodule Conduit.Handler do
   alias Conduit.{Db, Jwt, Json, Util}
   require Logger
 
+  def init do
+    :persistent_term.put({__MODULE__, :last_log}, :atomics.new(1, []))
+  end
+
   def handle("/api/" <> rest, method, query, auth, body) do
     r = %{query: query, auth: auth, body: body, now: System.os_time(:second)}
 
@@ -25,19 +29,13 @@ defmodule Conduit.Handler do
   # from the requests that could still succeed.
   defp log_db_down(e) do
     now = System.monotonic_time(:second)
-    ref = :persistent_term.get({__MODULE__, :last_log}, nil) || init_last_log()
+    ref = :persistent_term.get({__MODULE__, :last_log})
 
     last = :atomics.get(ref, 1)
 
     if now != last and :atomics.compare_exchange(ref, 1, last, now) == :ok do
       Logger.error("database unavailable: #{inspect(e)}")
     end
-  end
-
-  defp init_last_log do
-    ref = :atomics.new(1, [])
-    :persistent_term.put({__MODULE__, :last_log}, ref)
-    ref
   end
 
   defp pg_error("23505"), do: {422, Json.error("has already been taken")}

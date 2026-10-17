@@ -28,8 +28,6 @@ defmodule Conduit.Http do
           ip
       end
 
-    # active: true is safe here: a client sends its next request only after our response, and the head and body
-    # limits below bound what one request can buffer.
     {:ok, lsock} =
       :gen_tcp.listen(Keyword.fetch!(opts, :port), [
         :binary,
@@ -140,23 +138,41 @@ defmodule Conduit.Http do
   defp parse(buf) do
     case :erlang.decode_packet(:http_bin, buf, @decode_opts) do
       {:ok, {:http_request, method, {:abs_path, target}, vsn}, rest} ->
-        headers(rest, method, target, %{auth: nil, cl: 0, close: vsn == {1, 0}, chunked: false})
+        headers(rest, method, target, %{auth: nil, cl: 0, close: vsn == {1, 0}, chunked: false}, byte_size(buf) - byte_size(rest))
 
       {:more, _} when byte_size(buf) > @max_head -> {:error, 431}
       {:more, _} -> :more
       {:ok, {:http_request, _, _, _}, _} -> {:error, 400}
-      _ -> {:error, 400}
+      _ -> head_error(buf, 0)
     end
   end
 
-  defp headers(buf, method, target, acc) do
+  defp headers(_buf, _method, _target, _acc, used) when used > @max_head, do: {:error, 431}
+
+  defp headers(buf, method, target, acc, used) do
     case :erlang.decode_packet(:httph_bin, buf, @decode_opts) do
-      {:ok, {:http_header, _, name, _, value}, rest} -> headers(rest, method, target, header(name, value, acc))
-      {:ok, :http_eoh, rest} -> body(rest, method, target, acc)
-      {:more, _} when byte_size(buf) > @max_head -> {:error, 431}
+      {:ok, {:http_header, _, name, _, value}, rest} ->
+        headers(rest, method, target, header(name, value, acc), used + byte_size(buf) - byte_size(rest))
+
+      {:ok, :http_eoh, rest} ->
+        if used + byte_size(buf) - byte_size(rest) > @max_head,
+          do: {:error, 431},
+          else: body(rest, method, target, acc)
+
+      {:more, _} when used + byte_size(buf) > @max_head -> {:error, 431}
       {:more, _} -> :more
-      _ -> {:error, 400}
+      _ -> head_error(buf, used)
     end
+  end
+
+  defp head_error(buf, used) do
+    line_size =
+      case :binary.match(buf, "\n") do
+        {pos, 1} -> pos + 1
+        :nomatch -> byte_size(buf)
+      end
+
+    if used + line_size > @max_head, do: {:error, 431}, else: {:error, 400}
   end
 
   # The first Authorization header wins.

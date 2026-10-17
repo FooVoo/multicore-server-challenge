@@ -5,9 +5,9 @@ defmodule Conduit.Application do
   @impl true
   def start(_type, _args) do
     Conduit.Jwt.init(System.fetch_env!("JWT_SECRET"))
+    Conduit.Handler.init()
 
-    # Postgres shares the cores with us and each backend is busy only while its query runs, so about 1.5 backends per
-    # core keeps them fed; more of them just contend for the same cores and every statement gets slower.
+    # Pool leases cover client-side work as well as PostgreSQL execution.
     pool = env_int("POOL", max(2, div(3 * cores(), 2)))
 
     if pool > 95, do: raise("POOL must be at most 95")
